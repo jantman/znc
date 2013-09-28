@@ -17,6 +17,8 @@
 #include <znc/FileUtils.h>
 #include <znc/znc.h>
 
+#include <syslog.h>
+
 class CFailToBanMod : public CModule {
 public:
 	MODCONSTRUCTOR(CFailToBanMod) {
@@ -39,7 +41,7 @@ public:
 		else
 			m_uiAllowedFailed = sAttempts.ToUInt();;
 
-		if (sLogFile.empty())
+		if (sLogFile.empty() || !sLogFile.Equals("true"))
 		        m_sLogFile = "";
 		else
 		        m_sLogFile = GetSavePath() + "/fail2ban.log";
@@ -50,7 +52,7 @@ public:
 			sMessage = "Invalid argument, must be the number of minutes "
 				"IPs are blocked after a failed login and can be "
 				"followed by number of allowed failed login attempts"
-			        "and can be followed optionally by any third argument to log all actions to a file.";
+			        "and can be followed optionally by 'true' to log all actions to a file.";
 			return false;
 		}
 
@@ -63,7 +65,7 @@ public:
 	}
 
 	void Log(CString sLine, int iPrio = LOG_INFO) {
-	        if (!m_logFile.Equals("")) {
+	        if (!m_sLogFile.Equals("")) {
 			time_t curtime;
 			tm* timeinfo;
 			char buf[23];
@@ -93,7 +95,9 @@ public:
 	virtual void OnModCommand(const CString& sCommand) {
 		PutModule("This module can only be configured through its arguments.");
 		PutModule("The module argument is the number of minutes an IP");
-		PutModule("is blocked after a failed login.");
+		PutModule("is blocked after a failed login, followed optionally by.");
+		PutModule("the number of failed logins that trigger a block, followed");
+		PutModule("optionally by 'true' to write all actions to a log file.");
 	}
 
 	virtual void OnClientConnect(CZNCSock* pClient, const CString& sHost, unsigned short uPort) {
@@ -142,13 +146,13 @@ public:
 private:
 	TCacheMap<CString, unsigned int> m_Cache;
 	unsigned int                     m_uiAllowedFailed;
-        CString                          m_logFile;
+        CString                          m_sLogFile;
 };
 
 template<> void TModInfo<CFailToBanMod>(CModInfo& Info) {
 	Info.SetWikiPage("fail2ban");
 	Info.SetHasArgs(true);
-	Info.SetArgsHelpText("You might enter the time in minutes for the IP banning and the number of failed logins before any action is taken, optionally followed by any third argument that causes the module to log all actions.");
+	Info.SetArgsHelpText("Module takes three arguments: 1) the time in minutes for the IP banning, 2) the number of failed logins before any action is taken, 3) optional, 'true' to cause the module to log all actions to a file.");
 }
 
 GLOBALMODULEDEFS(CFailToBanMod, "Block IPs for some time after a failed login")
