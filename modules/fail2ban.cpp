@@ -14,16 +14,24 @@
  * limitations under the License.
  */
 
+#include <znc/FileUtils.h>
 #include <znc/znc.h>
 
 class CFailToBanMod : public CModule {
 public:
-	MODCONSTRUCTOR(CFailToBanMod) {}
-	virtual ~CFailToBanMod() {}
+	MODCONSTRUCTOR(CFailToBanMod) {
+		openlog("fail2ban", LOG_PID, LOG_DAEMON);
+	}
+
+	virtual ~CFailToBanMod() {
+		Log("Logging ended.");
+		closelog();
+	}
 
 	virtual bool OnLoad(const CString& sArgs, CString& sMessage) {
 		CString sTimeout = sArgs.Token(0);
 		CString sAttempts = sArgs.Token(1);
+		CString sLogFile = sArgs.Token(2);
 		unsigned int timeout = sTimeout.ToUInt();
 
 		if (sAttempts.empty())
@@ -31,20 +39,48 @@ public:
 		else
 			m_uiAllowedFailed = sAttempts.ToUInt();;
 
+		if (sLogFile.empty())
+		        m_sLogFile = "";
+		else
+		        m_sLogFile = GetSavePath() + "/fail2ban.log";
+
 		if (sArgs.empty()) {
 			timeout = 1;
-		} else if (timeout == 0 || m_uiAllowedFailed == 0 || !sArgs.Token(2, true).empty()) {
+		} else if (timeout == 0 || m_uiAllowedFailed == 0 || !sArgs.Token(3, true).empty()) {
 			sMessage = "Invalid argument, must be the number of minutes "
 				"IPs are blocked after a failed login and can be "
-				"followed by number of allowed failed login attempts";
+				"followed by number of allowed failed login attempts"
+			        "and can be followed optionally by any third argument to log all actions to a file.";
 			return false;
 		}
 
 		// SetTTL() wants milliseconds
 		m_Cache.SetTTL(timeout * 60 * 1000);
 
+		Log("Logging started. ZNC PID[" + CString(getpid()) + "] UID/GID[" + CString(getuid()) + ":" + CString(getgid()) + "]");
+
 		return true;
 	}
+
+	void Log(CString sLine, int iPrio = LOG_INFO) {
+	        if (!m_logFile.Equals("")) {
+			time_t curtime;
+			tm* timeinfo;
+			char buf[23];
+
+			time(&curtime);
+			timeinfo = localtime(&curtime);
+			strftime(buf,sizeof(buf),"[%Y-%m-%d %H:%M:%S] ",timeinfo);
+
+			CFile LogFile(m_sLogFile);
+
+			if (LogFile.Open(O_WRONLY | O_APPEND | O_CREAT))
+				LogFile.Write(buf + sLine + "\n");
+			else
+				DEBUG("Failed to write to [" << m_sLogFile  << "]: " << strerror(errno));
+		}
+	}
+
 
 	virtual void OnPostRehash() {
 		m_Cache.Clear();
@@ -68,6 +104,7 @@ public:
 
 		// refresh their ban
 		Add(sHost, *pCount);
+		Log("[" + m_pClient->GetRemoteIP() + "/" + sHost  + "] banning client, reconnecting too fast - count is " + CString(pCount));
 
 		pClient->Write("ERROR :Closing link [Please try again later - reconnecting too fast]\r\n");
 		pClient->Close(Csock::CLT_AFTERWRITE);
@@ -75,10 +112,14 @@ public:
 
 	virtual void OnFailedLogin(const CString& sUsername, const CString& sRemoteIP) {
 		unsigned int *pCount = m_Cache.GetItem(sRemoteIP);
-		if (pCount)
+		if (pCount) {
 			Add(sRemoteIP, *pCount + 1);
-		else
+			Log("Failed login from user " + sUsername + " remote IP " + sRemoteIP + " current count " + CString(pCount));
+		}
+		else {
 			Add(sRemoteIP, 1);
+		        Log("Failed login from user " + sUsername + " remote IP " + sRemoteIP);
+		}
 	}
 
 	virtual EModRet OnLoginAttempt(CSmartPtr<CAuthBase> Auth) {
@@ -101,12 +142,13 @@ public:
 private:
 	TCacheMap<CString, unsigned int> m_Cache;
 	unsigned int                     m_uiAllowedFailed;
+        CString                          m_logFile;
 };
 
 template<> void TModInfo<CFailToBanMod>(CModInfo& Info) {
 	Info.SetWikiPage("fail2ban");
 	Info.SetHasArgs(true);
-	Info.SetArgsHelpText("You might enter the time in minutes for the IP banning and the number of failed logins before any action is taken.");
+	Info.SetArgsHelpText("You might enter the time in minutes for the IP banning and the number of failed logins before any action is taken, optionally followed by any third argument that causes the module to log all actions.");
 }
 
 GLOBALMODULEDEFS(CFailToBanMod, "Block IPs for some time after a failed login")
