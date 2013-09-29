@@ -22,18 +22,18 @@
 class CFailToBanMod : public CModule {
 public:
 	MODCONSTRUCTOR(CFailToBanMod) {
-		openlog("fail2ban", LOG_PID, LOG_DAEMON);
+		openlog("znc-fail2ban", LOG_PID, LOG_DAEMON);
 	}
 
 	virtual ~CFailToBanMod() {
-		Log("Logging ended.");
+		Log("fail2ban Logging ended.");
 		closelog();
 	}
 
 	virtual bool OnLoad(const CString& sArgs, CString& sMessage) {
 		CString sTimeout = sArgs.Token(0);
 		CString sAttempts = sArgs.Token(1);
-		CString sLogFile = sArgs.Token(2);
+		CString sLogTarget = sArgs.Token(2);
 		unsigned int timeout = sTimeout.ToUInt();
 
 		if (sAttempts.empty())
@@ -41,10 +41,16 @@ public:
 		else
 			m_uiAllowedFailed = sAttempts.ToUInt();;
 
-		if (sLogFile.empty() || !sLogFile.Equals("true"))
-		        m_sLogFile = "";
+		if (sLogTarget.Equals("syslog"))
+			m_eLogMode = LOG_TO_SYSLOG;
+		else if (sLogTarget.Equals("both"))
+			m_eLogMode = LOG_TO_BOTH;
+		else if (sLogTarget.Equals("file"))
+			m_eLogMode = LOG_TO_FILE;
 		else
-		        m_sLogFile = GetSavePath() + "/fail2ban.log";
+			m_eLogMode = LOG_TO_NONE;
+
+		m_sLogFile = GetSavePath() + "/fail2ban.log";
 
 		if (sArgs.empty()) {
 			timeout = 1;
@@ -52,7 +58,8 @@ public:
 			sMessage = "Invalid argument, must be the number of minutes "
 				"IPs are blocked after a failed login and can be "
 				"followed by number of allowed failed login attempts"
-			        "and can be followed optionally by 'true' to log all actions to a file.";
+			        "and can be followed optionally by 'file', 'syslog', or 'both'"
+			        "to log all actions to the specified destination.";
 			return false;
 		}
 
@@ -65,7 +72,10 @@ public:
 	}
 
 	void Log(CString sLine, int iPrio = LOG_INFO) {
-	        if (!m_sLogFile.Equals("")) {
+		if (m_eLogMode & LOG_TO_SYSLOG)
+			syslog(iPrio, "%s", sLine.c_str());
+
+		if (m_eLogMode & LOG_TO_FILE) {
 			time_t curtime;
 			tm* timeinfo;
 			char buf[23];
@@ -97,7 +107,8 @@ public:
 		PutModule("The module argument is the number of minutes an IP");
 		PutModule("is blocked after a failed login, followed optionally by.");
 		PutModule("the number of failed logins that trigger a block, followed");
-		PutModule("optionally by 'true' to write all actions to a log file.");
+		PutModule("optionally by 'file', 'syslog' or 'both' to write all actions");
+		PutModule("to the specified destination.");
 	}
 
 	virtual void OnClientConnect(CZNCSock* pClient, const CString& sHost, unsigned short uPort) {
@@ -108,7 +119,7 @@ public:
 
 		// refresh their ban
 		Add(sHost, *pCount);
-		Log("[" + m_pClient->GetRemoteIP() + "/" + sHost  + "] banning client, reconnecting too fast - count is " + CString(pCount));
+		Log("banning client " + sHost + " - reconnecting too fast - count is " + CString(*pCount));
 
 		pClient->Write("ERROR :Closing link [Please try again later - reconnecting too fast]\r\n");
 		pClient->Close(Csock::CLT_AFTERWRITE);
@@ -118,7 +129,7 @@ public:
 		unsigned int *pCount = m_Cache.GetItem(sRemoteIP);
 		if (pCount) {
 			Add(sRemoteIP, *pCount + 1);
-			Log("Failed login from user " + sUsername + " remote IP " + sRemoteIP + " current count " + CString(pCount));
+			Log("Failed login from user " + sUsername + " remote IP " + sRemoteIP + " previous count " + CString(*pCount));
 		}
 		else {
 			Add(sRemoteIP, 1);
@@ -136,6 +147,7 @@ public:
 		unsigned int *pCount = m_Cache.GetItem(sRemoteIP);
 		if (pCount && *pCount >= m_uiAllowedFailed) {
 			// OnFailedLogin() will refresh their ban
+		        Log("OnLoginAttempt (web admin) - blocked login from " + sRemoteIP + " fail count is " + CString(*pCount));
 			Auth->RefuseLogin("Please try again later - reconnecting too fast");
 			return HALT;
 		}
@@ -146,13 +158,20 @@ public:
 private:
 	TCacheMap<CString, unsigned int> m_Cache;
 	unsigned int                     m_uiAllowedFailed;
+	enum LogMode {
+	        LOG_TO_NONE   = 0,
+		LOG_TO_FILE   = 1 << 0,
+		LOG_TO_SYSLOG = 1 << 1,
+		LOG_TO_BOTH   = LOG_TO_FILE | LOG_TO_SYSLOG
+	};
+	LogMode m_eLogMode;
         CString                          m_sLogFile;
 };
 
 template<> void TModInfo<CFailToBanMod>(CModInfo& Info) {
 	Info.SetWikiPage("fail2ban");
 	Info.SetHasArgs(true);
-	Info.SetArgsHelpText("Module takes three arguments: 1) the time in minutes for the IP banning, 2) the number of failed logins before any action is taken, 3) optional, 'true' to cause the module to log all actions to a file.");
+	Info.SetArgsHelpText("Module takes three arguments: 1) the time in minutes for the IP banning, 2) the number of failed logins before any action is taken, 3) optional, 'file', 'syslog' or 'both' to cause the module to log all actions to the specified destination.");
 }
 
 GLOBALMODULEDEFS(CFailToBanMod, "Block IPs for some time after a failed login")
