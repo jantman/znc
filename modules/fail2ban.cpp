@@ -16,6 +16,7 @@
 
 #include <znc/FileUtils.h>
 #include <znc/znc.h>
+#include <znc/User.h>
 
 #include <syslog.h>
 
@@ -103,12 +104,28 @@ public:
 	}
 
 	virtual void OnModCommand(const CString& sCommand) {
-		PutModule("This module can only be configured through its arguments.");
-		PutModule("The module argument is the number of minutes an IP");
-		PutModule("is blocked after a failed login, followed optionally by.");
-		PutModule("the number of failed logins that trigger a block, followed");
-		PutModule("optionally by 'file', 'syslog' or 'both' to write all actions");
-		PutModule("to the specified destination.");
+	        iterator it = mCache.m_mItems.begin();
+
+		if (!GetUser()->IsAdmin()) {
+			PutModule("Access denied - you must be a ZNC admin to run this command");
+			return;
+		}
+
+		CString sCmd = sCommand.Token(0);
+
+		if (sCmd.Equals("clear")) {
+		        m_Cache.Clear();
+
+			Log("cleared fail2ban cache via admin command");
+			PutModule("fail2ban cache cleared");
+		} else if (sCmd.Equals("show")) {
+			PutModule("Current fail2ban cache:");
+
+			while (it != mCache.m_mItems.end()) {
+			  PutModule(CString(&it->second.second));
+			}
+		} else
+			PutModule("Commands: show, clear, remove <host>");
 	}
 
 	virtual void OnClientConnect(CZNCSock* pClient, const CString& sHost, unsigned short uPort) {
